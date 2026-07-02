@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
@@ -27,28 +26,9 @@ from database.mongodb import (
     insert_record_mongo,
     update_record_by_id_mongo,
 )
+from API.schemas import EnergyRecordInput, EnergyRecordUpdateInput
 
 app = FastAPI(title="Energy Database API")
-
-
-class EnergyRecordInput(BaseModel):
-    datetime: datetime
-    pjme_mw: float
-    hour: int
-    day: int
-    month: int
-    year: int
-    dayofweek: int
-
-
-class EnergyRecordUpdateInput(BaseModel):
-    datetime: datetime
-    pjme_mw: float
-    hour: int
-    day: int
-    month: int
-    year: int
-    dayofweek: int
 
 
 @app.post("/records")
