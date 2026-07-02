@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import joblib
 import numpy as np
+import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -17,12 +18,9 @@ PROJECT_ROOT = BASE_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from database.database import get_all_values, insert_record
-from database.database import log_prediction_run
-from database.mongodb import get_all_values_mongo, insert_record_mongo
-
 model = joblib.load(PROJECT_ROOT / "models" / "ridge_energy_model.joblib")
 feature_columns = joblib.load(PROJECT_ROOT / "models" / "feature_columns.joblib")
+CSV_PATH = PROJECT_ROOT / "clean_energy_dataset.csv"
 
 
 # -----------------------
@@ -71,6 +69,33 @@ def build_model_features(data, lag_values):
     return np.array([[feature_map[column] for column in feature_columns]], dtype=float)
 
 
+def get_all_values_csv():
+    df = pd.read_csv(CSV_PATH, parse_dates=["Datetime"])
+    df = df.sort_values("Datetime")
+    return df["PJME_MW"].tolist()
+
+
+def append_prediction_to_csv(prediction):
+    df = pd.read_csv(CSV_PATH, parse_dates=["Datetime"])
+    df = df.sort_values("Datetime")
+
+    last_time = df.iloc[-1]["Datetime"]
+    next_time = last_time + pd.Timedelta(hours=1)
+
+    new_row = {
+        "Datetime": next_time,
+        "PJME_MW": float(prediction),
+        "Hour": next_time.hour,
+        "Day": next_time.day,
+        "Month": next_time.month,
+        "Year": next_time.year,
+        "DayOfWeek": next_time.dayofweek,
+    }
+
+    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+    df.to_csv(CSV_PATH, index=False)
+
+
 # -----------------------
 # PREDICT
 # -----------------------
@@ -78,53 +103,17 @@ def build_model_features(data, lag_values):
 def predict(data: PredictionInput):
 
     try:
-        values = get_all_values()
-        history_source = "sql"
+        values = get_all_values_csv()
+        history_source = "csv"
         if len(values) < 168:
-            values = get_all_values_mongo()
-            history_source = "mongo"
-
-        if len(values) < 168:
-            raise ValueError(
-                "Not enough history to build lag features. Seed at least 168 hourly records in SQL or MongoDB."
-            )
+            raise ValueError("Not enough history to build lag features. Seed at least 168 hourly records in the CSV.")
 
         lag_values = build_lags(values)
         features = build_model_features(data, lag_values)
 
         prediction = model.predict(features)[0]
 
-        now = datetime.now()
-        sql_record_id = insert_record(
-            now,
-            prediction,
-            now.hour,
-            now.day,
-            now.month,
-            now.year,
-            now.weekday(),
-            source_name="prediction_api",
-            source_type="prediction",
-        )
-        insert_record_mongo(
-            now,
-            prediction,
-            now.hour,
-            now.day,
-            now.month,
-            now.year,
-            now.weekday(),
-            source="prediction_api",
-        )
-
-        log_prediction_run(
-            run_time=now,
-            model_name="ridge_energy_model.joblib",
-            feature_count=len(feature_columns),
-            predicted_value=prediction,
-            source_record_id=sql_record_id,
-            notes=f"history_source={history_source}",
-        )
+        append_prediction_to_csv(float(prediction))
 
         return {
             "predicted_energy_mw": float(prediction),
